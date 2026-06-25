@@ -92,7 +92,8 @@ async def get_resale_offers_for_gift(gift_id: int):
         result = await user_app.invoke(raw.functions.payments.GetResaleStarGifts(
             gift_id=gift_id,
             sort_by_price=True,
-            limit=100
+            limit=100,
+            offset=""
         ))
         return result.gifts
     except FloodWait as e:
@@ -193,13 +194,25 @@ def get_main_menu_keyboard():
     ])
 
 # الأوامر الأساسية للبوت
-@bot_app.on_message(filters.command("start") & filters.private & filters.user(ADMIN_ID))
+@bot_app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
+    if message.from_user.id != ADMIN_ID:
+        await message.reply_text(f"عذراً، هذا البوت مخصص للمسؤول فقط.\nID الخاص بك هو: `{message.from_user.id}`")
+        return
+
     await message.reply_text(
         "مرحباً بك في بوت مراقبة هدايا NFT!\n"\
         "استخدم لوحة التحكم أدناه لإدارة المراقبة.",
         reply_markup=get_main_menu_keyboard()
     )
+
+@bot_app.on_message(filters.command("id") & filters.private)
+async def id_command(client, message):
+    await message.reply_text(f"ID الخاص بك هو: `{message.from_user.id}`")
+
+@bot_app.on_message(filters.command("ping") & filters.private)
+async def ping_command(client, message):
+    await message.reply_text("PONG! 🏓\nالبوت يعمل بنجاح.")
 
 # معالج الـ Callback Queries
 @bot_app.on_callback_query(filters.user(ADMIN_ID))
@@ -348,18 +361,32 @@ async def main():
     await bot_app.start()
     logger.info("Bot client started.")
 
-    # محاولة تسجيل دخول المستخدم بشكل تفاعلي عبر الترمنال
-    user_logged_in = await user_login_interactive()
-    if not user_logged_in:
-        logger.error("Failed to log in user client. Monitoring will not work.")
-        await bot_app.send_message(ADMIN_ID, "فشل تسجيل دخول عميل المستخدم. لن تعمل المراقبة. الرجاء التحقق من معلومات الدخول وإعادة تشغيل البوت.")
-        # لا نوقف البوت هنا، فقط المراقبة لن تعمل
+    # محاولة تشغيل عميل المستخدم في الخلفية لتجنب تعطيل البوت
+    async def setup_user():
+        # استخدام asyncio.to_thread لضمان عدم توقف الـ event loop عند طلب الإدخال من الترمنال (لأن Pyrogram يستخدم استدعاءات متزامنة للإدخال أحياناً)
+        user_logged_in = await asyncio.to_thread(lambda: asyncio.run(user_login_interactive()))
+
+        if not user_logged_in:
+            logger.error("Failed to log in user client. Monitoring will not work.")
+            try:
+                await bot_app.send_message(ADMIN_ID, "⚠️ فشل تسجيل دخول عميل المستخدم. لن تعمل المراقبة حتى يتم تسجيل الدخول من الترمنال.")
+            except Exception:
+                pass
+        else:
+            logger.info("User client is ready.")
+            try:
+                await bot_app.send_message(ADMIN_ID, "✅ عميل المستخدم جاهز. يمكنك الآن بدء المراقبة.")
+            except Exception:
+                pass
+
+    asyncio.create_task(setup_user())
 
     # تشغيل البوت بشكل دائم لمعالجة الأوامر
     await idle()
 
     # إيقاف العملاء عند إغلاق البوت
-    await user_app.stop()
+    if user_app.is_connected:
+        await user_app.stop()
     await bot_app.stop()
     logger.info("Clients stopped.")
 
