@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import sys
-from pyrogram import Client, filters
+from pyrogram import Client, filters, utils, raw
 from pyrogram.errors import FloodWait, SessionPasswordNeeded, PhoneCodeInvalid, PhoneCodeEmpty, AuthKeyUnregistered
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram import idle
@@ -17,6 +17,12 @@ from config import API_ID, API_HASH, BOT_TOKEN, ADMIN_ID, PHONE_NUMBER, ALERT_PE
 # إعدادات التسجيل
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# حل مشكلة معرفات القنوات الجديدة في تليجرام (Monkeypatch Pyrogram)
+# تليجرام بدأت باستخدام معرفات تبدأ بـ -100 وتتكون من أرقام أكثر مما تدعمه النسخة الحالية
+# نعدل النطاقات لضمان عدم تداخل معرفات القنوات الجديدة مع مجموعات الدردشة العادية
+utils.MIN_CHANNEL_ID = -1002200000000000
+utils.MIN_CHAT_ID = -999999999999
 
 # تهيئة عميل البوت
 bot_app = Client(
@@ -98,7 +104,6 @@ async def user_login_interactive():
 
 # دالة لجلب قائمة الهدايا المتاحة (للحصول على gift_id و slug)
 async def get_all_star_gifts():
-    from pyrogram import raw
     try:
         result = await user_app.invoke(raw.functions.payments.GetStarGifts(hash=0))
         return result.gifts
@@ -112,7 +117,6 @@ async def get_all_star_gifts():
 
 # دالة لجلب عروض إعادة البيع لهدية معينة
 async def get_resale_offers_for_gift(gift_id: int):
-    from pyrogram import raw
     try:
         result = await user_app.invoke(raw.functions.payments.GetResaleStarGifts(
             gift_id=gift_id,
@@ -211,7 +215,10 @@ def get_main_menu_keyboard():
 # معالج لطباعة كل الرسائل المستلمة (لأغراض التشخيص)
 @bot_app.on_message(filters.all & filters.private)
 async def debug_handler(client, message):
-    logger.info(f"Received message from {message.from_user.id}: {message.text or '[No Text]'}")
+    try:
+        logger.info(f"Received message from {message.from_user.id}: {message.text or '[No Text]'}")
+    except Exception as e:
+        logger.error(f"Error in debug_handler: {e}")
     message.continue_propagation()
 
 # الأوامر الأساسية للبوت
@@ -388,17 +395,20 @@ async def main():
     await bot_app.start()
     logger.info("Bot client started successfully.")
 
-    # تشغيل عميل المستخدم بشكل مستقل لتجنب تعليق البوت
-    try:
-        user_logged_in = await user_login_interactive()
-        if not user_logged_in:
-            logger.error("Failed to log in user client. Monitoring will not work.")
-            await bot_app.send_message(ADMIN_ID, "⚠️ فشل تسجيل دخول عميل المستخدم. لن تعمل المراقبة حتى يتم تسجيل الدخول من الترمنال.")
-        else:
-            logger.info("User client is ready.")
-            await bot_app.send_message(ADMIN_ID, "✅ عميل المستخدم جاهز. يمكنك الآن بدء المراقبة.")
-    except Exception as e:
-        logger.error(f"Critical error during user setup: {e}")
+    # تشغيل عميل المستخدم في الخلفية لتجنب تعليق البوت أثناء تسجيل الدخول
+    async def setup_user():
+        try:
+            user_logged_in = await user_login_interactive()
+            if not user_logged_in:
+                logger.error("Failed to log in user client. Monitoring will not work.")
+                await bot_app.send_message(ADMIN_ID, "⚠️ فشل تسجيل دخول عميل المستخدم. لن تعمل المراقبة حتى يتم تسجيل الدخول من الترمنال.")
+            else:
+                logger.info("User client is ready.")
+                await bot_app.send_message(ADMIN_ID, "✅ عميل المستخدم جاهز. يمكنك الآن بدء المراقبة.")
+        except Exception as e:
+            logger.error(f"Critical error during user setup: {e}")
+
+    asyncio.create_task(setup_user())
 
     # تشغيل البوت بشكل دائم لمعالجة الأوامر
     logger.info("Bot is idle and waiting for messages...")
