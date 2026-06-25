@@ -1,3 +1,4 @@
 pyrofork
 pytz
 tgcrypto
+aiosqlite

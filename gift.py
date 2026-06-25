@@ -9,6 +9,8 @@ import pytz
 from datetime import datetime
 import json
 import os
+import sqlite3
+import aiosqlite
 
 from config import API_ID, API_HASH, BOT_TOKEN, ADMIN_ID, PHONE_NUMBER, ALERT_PERCENTAGE, MONITOR_INTERVAL, TIMEZONE, USER_SESSION_NAME, BOT_SESSION_NAME
 
@@ -39,9 +41,32 @@ last_checked_time = None
 alert_percentage = ALERT_PERCENTAGE
 monitor_interval = MONITOR_INTERVAL # بالدقائق
 
-# تخزين بيانات الهدايا والأسعار التاريخية
-# {gift_id: [price1, price2, ...]}
-star_gifts_history = {}
+# إعداد قاعدة البيانات بشكل غير متزامن
+async def init_db():
+    async with aiosqlite.connect('gifts_data.db') as db:
+        await db.execute('''CREATE TABLE IF NOT EXISTS prices
+                            (gift_id INTEGER, price REAL, timestamp DATETIME)''')
+        await db.commit()
+
+async def save_price_to_db(gift_id, price):
+    async with aiosqlite.connect('gifts_data.db') as db:
+        await db.execute("INSERT INTO prices VALUES (?, ?, ?)", (gift_id, price, datetime.now()))
+        await db.commit()
+
+async def get_average_price_from_db(gift_id, limit=10):
+    async with aiosqlite.connect('gifts_data.db') as db:
+        async with db.execute("SELECT price FROM prices WHERE gift_id = ? ORDER BY timestamp DESC LIMIT ?", (gift_id, limit)) as cursor:
+            rows = await cursor.fetchall()
+            prices = [row[0] for row in rows]
+            if not prices:
+                return 0
+            return sum(prices) / len(prices)
+
+async def get_total_recorded_gifts():
+    async with aiosqlite.connect('gifts_data.db') as db:
+        async with db.execute("SELECT COUNT(DISTINCT gift_id) FROM prices") as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
 
 # لتخزين حالة المدير (لإدارة إدخال الإعدادات)
 admin_state = {}
@@ -104,13 +129,6 @@ async def get_resale_offers_for_gift(gift_id: int):
         logger.error(f"Error getting resale offers for gift_id {gift_id} with user client: {e}")
         return []
 
-# دالة لحساب متوسط آخر 10 أسعار
-def calculate_average_price(prices: list):
-    if not prices:
-        return 0
-    recent_prices = prices[-10:]
-    return sum(recent_prices) / len(recent_prices)
-
 # دالة لمراقبة الهدايا وإرسال التنبيهات
 async def monitor_star_gifts():
     global last_checked_time
@@ -131,9 +149,6 @@ async def monitor_star_gifts():
         gift_id = gift.id
         gift_slug = getattr(gift, 'slug', None)
 
-        if gift_id not in star_gifts_history:
-            star_gifts_history[gift_id] = []
-
         resale_offers = await get_resale_offers_for_gift(gift_id)
 
         if not resale_offers:
@@ -145,13 +160,13 @@ async def monitor_star_gifts():
             price = getattr(offer, 'price_stars', None) or getattr(offer, 'price_grams', None)
             if price is not None:
                 current_prices.append(price)
-                star_gifts_history[gift_id].append(price)
+                await save_price_to_db(gift_id, price)
 
         if not current_prices:
             logger.info(f"No valid prices found in resale offers for gift_id {gift_id}.")
             continue
 
-        average_price = calculate_average_price(star_gifts_history[gift_id])
+        average_price = await get_average_price_from_db(gift_id)
 
         if average_price == 0:
             logger.info(f"Not enough historical data for gift_id {gift_id} to calculate average.")
@@ -285,12 +300,13 @@ async def callback_query_handler(client, callback_query):
     elif data == "stats":
         status = "نشطة" if monitoring_active else "متوقفة"
         last_check_str = last_checked_time.astimezone(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S %Z%z") if last_checked_time else "لم يتم الفحص بعد"
+        total_gifts = await get_total_recorded_gifts()
         await callback_query.edit_message_text(
             f"إحصائيات البوت:\n\n"\
             f"حالة المراقبة: {status}\n"\
             f"حالة عميل المستخدم: {"متصل" if user_app.is_connected else "غير متصل"}\n"\
             f"آخر فحص: {last_check_str}\n"\
-            f"عدد الهدايا في السجل: {len(star_gifts_history)}\n"\
+            f"عدد الهدايا في السجل (DB): {total_gifts}\n"\
             f"نسبة التنبيه: {alert_percentage}%\n"\
             f"فترة المراقبة: {monitor_interval} دقيقة",
             reply_markup=InlineKeyboardMarkup([
@@ -357,14 +373,19 @@ async def handle_settings_input(client, message):
 
 
 async def main():
+    # تهيئة قاعدة البيانات
+    await init_db()
+
     # بدء عميل البوت أولاً
     await bot_app.start()
     logger.info("Bot client started.")
 
     # محاولة تشغيل عميل المستخدم في الخلفية لتجنب تعطيل البوت
     async def setup_user():
-        # استخدام asyncio.to_thread لضمان عدم توقف الـ event loop عند طلب الإدخال من الترمنال (لأن Pyrogram يستخدم استدعاءات متزامنة للإدخال أحياناً)
-        user_logged_in = await asyncio.to_thread(lambda: asyncio.run(user_login_interactive()))
+        # تشغيل تسجيل دخول المستخدم في خيط منفصل لتجنب حظر الـ event loop عند طلب الإدخال
+        # لكن بما أن Pyrogram هو async، سنقوم بتشغيله مباشرة ونترك التعامل مع المدخلات للمستخدم في الترمنال
+        # تم نقل المنطق ليكون أبسط وأكثر أماناً لعملية الـ shutdown
+        user_logged_in = await user_login_interactive()
 
         if not user_logged_in:
             logger.error("Failed to log in user client. Monitoring will not work.")
