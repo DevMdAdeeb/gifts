@@ -208,9 +208,16 @@ def get_main_menu_keyboard():
         [InlineKeyboardButton("آخر التنبيهات", callback_data="latest_alerts")]
     ])
 
+# معالج لطباعة كل الرسائل المستلمة (لأغراض التشخيص)
+@bot_app.on_message(filters.all & filters.private)
+async def debug_handler(client, message):
+    logger.info(f"Received message from {message.from_user.id}: {message.text or '[No Text]'}")
+    message.continue_propagation()
+
 # الأوامر الأساسية للبوت
 @bot_app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
+    logger.info(f"Handling /start for {message.from_user.id}")
     if message.from_user.id != ADMIN_ID:
         await message.reply_text(f"عذراً، هذا البوت مخصص للمسؤول فقط.\nID الخاص بك هو: `{message.from_user.id}`")
         return
@@ -377,32 +384,24 @@ async def main():
     await init_db()
 
     # بدء عميل البوت أولاً
+    logger.info("Starting Bot client...")
     await bot_app.start()
-    logger.info("Bot client started.")
+    logger.info("Bot client started successfully.")
 
-    # محاولة تشغيل عميل المستخدم في الخلفية لتجنب تعطيل البوت
-    async def setup_user():
-        # تشغيل تسجيل دخول المستخدم في خيط منفصل لتجنب حظر الـ event loop عند طلب الإدخال
-        # لكن بما أن Pyrogram هو async، سنقوم بتشغيله مباشرة ونترك التعامل مع المدخلات للمستخدم في الترمنال
-        # تم نقل المنطق ليكون أبسط وأكثر أماناً لعملية الـ shutdown
+    # تشغيل عميل المستخدم بشكل مستقل لتجنب تعليق البوت
+    try:
         user_logged_in = await user_login_interactive()
-
         if not user_logged_in:
             logger.error("Failed to log in user client. Monitoring will not work.")
-            try:
-                await bot_app.send_message(ADMIN_ID, "⚠️ فشل تسجيل دخول عميل المستخدم. لن تعمل المراقبة حتى يتم تسجيل الدخول من الترمنال.")
-            except Exception:
-                pass
+            await bot_app.send_message(ADMIN_ID, "⚠️ فشل تسجيل دخول عميل المستخدم. لن تعمل المراقبة حتى يتم تسجيل الدخول من الترمنال.")
         else:
             logger.info("User client is ready.")
-            try:
-                await bot_app.send_message(ADMIN_ID, "✅ عميل المستخدم جاهز. يمكنك الآن بدء المراقبة.")
-            except Exception:
-                pass
-
-    asyncio.create_task(setup_user())
+            await bot_app.send_message(ADMIN_ID, "✅ عميل المستخدم جاهز. يمكنك الآن بدء المراقبة.")
+    except Exception as e:
+        logger.error(f"Critical error during user setup: {e}")
 
     # تشغيل البوت بشكل دائم لمعالجة الأوامر
+    logger.info("Bot is idle and waiting for messages...")
     await idle()
 
     # إيقاف العملاء عند إغلاق البوت
