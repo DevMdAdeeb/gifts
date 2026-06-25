@@ -1,8 +1,8 @@
 API_ID = 23185058  # احصل عليه من my.telegram.org
 API_HASH = 'ae6e1ebaac4338c4d2a04a245f47cbc8'  # احصل عليه من my.telegram.org
-BOT_TOKEN = '8468078030:AAEMoKrfi1izbDRA1FAiMMC-Q_kumwi1qwM'  # احصل عليه من BotFather
+BOT_TOKEN = '7141873874:AAE_I_3oWNwGvkuYoT3ofTbDQfEknmpTWiw'  # احصل عليه من BotFather
 ADMIN_ID = 873649941  # معرف المدير
-PHONE_NUMBER = '+967738871334' # رقم هاتف حساب المستخدم للمراقبة (مع رمز الدولة)
+PHONE_NUMBER = '+967772037858' # رقم هاتف حساب المستخدم للمراقبة (مع رمز الدولة)
 
 ALERT_PERCENTAGE = 20  # النسبة المئوية الافتراضية للتنبيه
 MONITOR_INTERVAL = 5  # فترة المراقبة الافتراضية بالدقائق
